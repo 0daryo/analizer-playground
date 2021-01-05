@@ -1,0 +1,5 @@
+linters-settings:
+  custom:
+    main:
+      path: ./plugin.so
+      description: Analyze test
