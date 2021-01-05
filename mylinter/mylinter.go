@@ -1,42 +1,68 @@
 package mylinter
 
 import (
-	"fmt"
 	"go/ast"
+	"go/token"
+	"go/types"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
 	"golang.org/x/tools/go/ast/inspector"
-	"golang.org/x/tools/go/types/typeutil"
 )
 
 var Analyzer = &analysis.Analyzer{
 	Name: "mylinter",
-	Doc:  Doc,
+	Doc:  doc,
 	Run:  run,
 	Requires: []*analysis.Analyzer{
 		inspect.Analyzer,
 	},
 }
 
-const Doc = "mylinter is ..."
+const doc = "unused find unused identifyers"
 
 func run(pass *analysis.Pass) (interface{}, error) {
 	inspect := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
 
 	nodeFilter := []ast.Node{
-		(*ast.CallExpr)(nil),
+		(*ast.BinaryExpr)(nil),
 	}
-
 	inspect.Preorder(nodeFilter, func(n ast.Node) {
-		call := n.(*ast.CallExpr)
+		e := n.(*ast.BinaryExpr)
 
-		fn := typeutil.StaticCallee(pass.TypesInfo, call)
-		if fn == nil {
+		// Only want == or != comparisons.
+		if e.Op != token.EQL && e.Op != token.NEQ {
 			return
 		}
-		fmt.Printf("%+v\n", fn.Name())
-	})
 
+		// Only want comparisons with a nil identifier on one side.
+		var e2 ast.Expr
+		switch {
+		case pass.TypesInfo.Types[e.X].IsNil():
+			e2 = e.Y
+		case pass.TypesInfo.Types[e.Y].IsNil():
+			e2 = e.X
+		default:
+			return
+		}
+
+		// Only want identifiers or selector expressions.
+		var obj types.Object
+		switch v := e2.(type) {
+		case *ast.Ident:
+			obj = pass.TypesInfo.Uses[v]
+		case *ast.SelectorExpr:
+			obj = pass.TypesInfo.Uses[v.Sel]
+		default:
+			return
+		}
+
+		// Only want functions.
+		if _, ok := obj.(*types.Func); !ok {
+			return
+		}
+
+		pass.ReportRangef(e, "comparison of function %v %v nil is always %v", obj.Name(), e.Op, e.Op == token.NEQ)
+	})
 	return nil, nil
 }
